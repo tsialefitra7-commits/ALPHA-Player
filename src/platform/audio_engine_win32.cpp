@@ -78,7 +78,7 @@ void AudioEngine::run(std::filesystem::path file,HWND window,UINT message){
         UINT32 capacity=0;if(FAILED(a.client->GetBufferSize(&capacity))||!capacity)goto cleanup;
         if(FAILED(a.client->Start()))goto cleanup;
         {
-            Equalizer10 eq;std::array<float,10> gains{};
+            Equalizer10 eq;Visualizer visualizer;std::array<float,10> gains{};
             for(std::size_t i=0;i<10;++i)gains[i]=gains_[i].load();
             eq.configure(rate,gains);DWORD flags=0;bool ended=false;
             while(!stop_&&!ended){
@@ -106,8 +106,9 @@ void AudioEngine::run(std::filesystem::path file,HWND window,UINT message){
                 eq.process(pcm.data(),frames,channels);
                 double energy=0;
                 for(float& v:pcm){v=std::clamp(v,-1.0f,1.0f);energy+=double(v)*v;v*=volume_.load();}
-                for(std::size_t i=31;i>0;--i)levels_[i]=levels_[i-1].load()*0.88f;
-                levels_[0]=static_cast<float>(std::clamp(std::sqrt(energy/pcm.size()),0.0,1.0));
+                visualizer.push(pcm.data(),frames,channels);
+                const auto visualLevels=visualizer.levels();
+                for(std::size_t i=0;i<32;++i)levels_[i]=visualLevels[i];
                 position_=static_cast<std::uint64_t>(std::max<LONGLONG>(0,stamp));
                 std::size_t offset=0;
                 while(offset<frames&&!stop_){
