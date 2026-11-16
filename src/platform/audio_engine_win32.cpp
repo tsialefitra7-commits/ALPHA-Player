@@ -27,6 +27,7 @@ bool AudioEngine::play(const std::filesystem::path& file,HWND window,UINT messag
 }
 void AudioEngine::pause(bool value) noexcept {paused_=value;}
 void AudioEngine::stop() noexcept {stop_=true;paused_=false;if(worker_.joinable())worker_.join();playing_=false;}
+void AudioEngine::seek(std::uint64_t value) noexcept { seekTarget_=value; seekPending_=true; }
 void AudioEngine::setVolume(float value) noexcept {volume_=std::clamp(value,0.0f,1.0f);}
 void AudioEngine::setEqualizer(const std::array<float,10>& values) noexcept {
     for(std::size_t i=0;i<10;++i)gains_[i]=std::clamp(std::isfinite(values[i])?values[i]:0.0f,-12.0f,12.0f);
@@ -85,6 +86,13 @@ void AudioEngine::run(std::filesystem::path file,HWND window,UINT message){
                 if(FAILED(a.client->Start()))break;
                 UINT32 padding=0;if(FAILED(a.client->GetCurrentPadding(&padding)))break;
                 if(padding>=capacity){Sleep(3);continue;}
+                if(seekPending_.exchange(false)){
+                    PROPVARIANT target;PropVariantInit(&target);target.vt=VT_I8;
+                    target.hVal.QuadPart=static_cast<LONGLONG>(seekTarget_.load());
+                    const HRESULT seekHr=a.reader->SetCurrentPosition(GUID_NULL,target);
+                    PropVariantClear(&target);
+                    if(SUCCEEDED(seekHr))position_=seekTarget_.load();
+                }
                 IMFSample* sample=nullptr;LONGLONG stamp=0;
                 hr=a.reader->ReadSample(static_cast<DWORD>(MF_SOURCE_READER_FIRST_AUDIO_STREAM),0,nullptr,&flags,&stamp,&sample);
                 if(FAILED(hr)){release(sample);break;}
