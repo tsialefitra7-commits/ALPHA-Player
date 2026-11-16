@@ -1,385 +1,126 @@
 #define NOMINMAX
 #include <windows.h>
-#include <windowsx.h>
 #include <commdlg.h>
-#include <mfapi.h>
-#include <mfplay.h>
-#include <wrl/client.h>
-#include <string>
+#include <commctrl.h>
 #include <algorithm>
-#include <cmath>
-
-#pragma comment(lib, "mfplat.lib")
-#pragma comment(lib, "mfplay.lib")
-#pragma comment(lib, "mfuuid.lib")
-#pragma comment(lib, "ole32.lib")
-
-using Microsoft::WRL::ComPtr;
-
+#include <array>
+#include <filesystem>
+#include <string>
+#include "platform/audio_engine_win32.hpp"
 namespace {
-constexpr wchar_t kClassName[] = L"ALPHA_PLAYER_WINDOW";
-constexpr UINT_PTR kTimerId = 1;
-constexpr UINT kTimerIntervalMs = 250;
-
-struct Palette {
-    COLORREF background = RGB(15, 17, 25);
-    COLORREF panel = RGB(25, 28, 40);
-    COLORREF panelLight = RGB(34, 38, 54);
-    COLORREF text = RGB(244, 246, 255);
-    COLORREF muted = RGB(143, 151, 174);
-    COLORREF blue = RGB(49, 132, 255);
-    COLORREF violet = RGB(145, 82, 255);
-    COLORREF cyan = RGB(36, 220, 220);
-    COLORREF pink = RGB(255, 75, 163);
-};
-Palette g_colors;
-
-class PlayerCallback final : public IMFPMediaPlayerCallback {
-public:
-    explicit PlayerCallback(HWND hwnd) : hwnd_(hwnd) {}
-    STDMETHODIMP QueryInterface(REFIID riid, void** ppv) override {
-        if (!ppv) return E_POINTER;
-        *ppv = nullptr;
-        if (riid == __uuidof(IUnknown) || riid == __uuidof(IMFPMediaPlayerCallback)) {
-            *ppv = static_cast<IMFPMediaPlayerCallback*>(this);
-            AddRef();
-            return S_OK;
+constexpr wchar_t ClassName[]=L"ALPHA_PLAYER_WINDOW";
+constexpr UINT TimerId=1,FinishedMessage=WM_APP+1;
+enum {OpenId=100,PlayId,StopId,VolumeId,EqBase=200};
+HWND windowHandle{},volumeControl{};
+std::array<HWND,10> eqControls{};
+alpha::win32::AudioEngine audio;
+std::filesystem::path currentFile;
+bool paused=false;
+COLORREF bg=RGB(15,17,25),panel=RGB(26,30,43),white=RGB(244,246,255),muted=RGB(145,155,180),cyan=RGB(39,218,225),violet=RGB(151,88,255),pink=RGB(255,82,166);
+constexpr std::array<const wchar_t*,10> labels{L"31",L"62",L"125",L"250",L"500",L"1K",L"2K",L"4K",L"8K",L"16K"};
+void text(HDC dc,const wchar_t* value,int x,int y,int size,COLORREF color,bool bold=false){
+    HFONT f=CreateFontW(-size,0,0,0,bold?FW_SEMIBOLD:FW_NORMAL,FALSE,FALSE,FALSE,DEFAULT_CHARSET,OUT_DEFAULT_PRECIS,CLIP_DEFAULT_PRECIS,CLEARTYPE_QUALITY,DEFAULT_PITCH,L"Segoe UI");
+    auto old=SelectObject(dc,f);SetBkMode(dc,TRANSPARENT);SetTextColor(dc,color);TextOutW(dc,x,y,value,static_cast<int>(wcslen(value)));SelectObject(dc,old);DeleteObject(f);
+}
+void fill(HDC dc,RECT r,COLORREF color){HBRUSH b=CreateSolidBrush(color);FillRect(dc,&r,b);DeleteObject(b);}
+void openFile(){
+    wchar_t path[32768]{};OPENFILENAMEW ofn{};ofn.lStructSize=sizeof(ofn);ofn.hwndOwner=windowHandle;
+    ofn.lpstrFilter=L"Audio\0*.mp3;*.wav;*.flac;*.aac;*.m4a;*.wma;*.ogg;*.opus\0All files\0*.*\0";
+    ofn.lpstrFile=path;ofn.nMaxFile=static_cast<DWORD>(std::size(path));ofn.Flags=OFN_FILEMUSTEXIST|OFN_PATHMUSTEXIST;
+    if(!GetOpenFileNameW(&ofn))return;
+    currentFile=path;paused=false;
+    if(!audio.play(currentFile,windowHandle,FinishedMessage))MessageBoxW(windowHandle,L"Le moteur audio n'a pas pu démarrer.",L"ALPHA Player",MB_ICONERROR);
+    InvalidateRect(windowHandle,nullptr,FALSE);
+}
+void setEq(){
+    std::array<float,10> gains{};
+    for(int i=0;i<10;++i)gains[static_cast<std::size_t>(i)]=static_cast<float>(SendMessageW(eqControls[static_cast<std::size_t>(i)],TBM_GETPOS,0,0));
+    audio.setEqualizer(gains);
+}
+void paint(HWND hwnd){
+    PAINTSTRUCT ps{};HDC dc=BeginPaint(hwnd,&ps);RECT r{};GetClientRect(hwnd,&r);fill(dc,r,bg);
+    RECT top{0,0,r.right,84};fill(dc,top,RGB(20,23,34));
+    text(dc,L"ALPHA",30,20,25,white,true);text(dc,L"PLAYER",119,30,12,cyan,true);
+    text(dc,L"YOUR SOUND. YOUR SPACE.",r.right-260,31,11,muted,true);
+    RECT card{24,105,r.right-24,r.bottom-24};fill(dc,card,panel);
+    text(dc,L"NOW PLAYING",48,132,11,cyan,true);
+    const std::wstring title=currentFile.empty()?L"Aucun morceau sélectionné":currentFile.filename().wstring();
+    text(dc,title.c_str(),48,166,23,white,true);
+    text(dc,L"ÉGALISEUR 10 BANDES",48,280,12,muted,true);
+    text(dc,L"-12 dB",48,322,9,muted);text(dc,L"0 dB",48,392,9,muted);text(dc,L"+12 dB",48,460,9,muted);
+    text(dc,L"VISUALISEUR AUDIO",430,280,12,muted,true);
+    const auto levels=audio.levels();
+    for(std::size_t i=0;i<levels.size();++i){
+        const int h=static_cast<int>(std::clamp(levels[i]*130.0f,2.0f,130.0f));
+        RECT bar{430+static_cast<int>(i)*17,475-h,442+static_cast<int>(i)*17,475};
+        fill(dc,bar,i%3==0?cyan:(i%3==1?violet:pink));
+    }
+    const auto pos=audio.position()/10000000ULL,dur=audio.duration()/10000000ULL;
+    wchar_t time[80]{};swprintf_s(time,L"%02llu:%02llu  /  %02llu:%02llu",
+      static_cast<unsigned long long>(pos/60),static_cast<unsigned long long>(pos%60),
+      static_cast<unsigned long long>(dur/60),static_cast<unsigned long long>(dur%60));
+    text(dc,time,48,r.bottom-90,11,muted);
+    text(dc,L"Le signal décodé traverse l'égaliseur avant sa sortie WASAPI.",48,r.bottom-58,10,muted);
+    EndPaint(hwnd,&ps);
+}
+LRESULT CALLBACK proc(HWND hwnd,UINT msg,WPARAM wp,LPARAM lp){
+    switch(msg){
+    case WM_CREATE:{
+        windowHandle=hwnd;INITCOMMONCONTROLSEX ic{sizeof(ic),ICC_BAR_CLASSES};InitCommonControlsEx(&ic);
+        auto make=[&](const wchar_t* cls,const wchar_t* label,DWORD style,int x,int y,int w,int h,int id){
+            return CreateWindowExW(0,cls,label,WS_CHILD|WS_VISIBLE|style,x,y,w,h,hwnd,reinterpret_cast<HMENU>(static_cast<INT_PTR>(id)),GetModuleHandleW(nullptr),nullptr);
+        };
+        make(L"BUTTON",L"Ouvrir un fichier",BS_PUSHBUTTON,30,195,145,36,OpenId);
+        make(L"BUTTON",L"Lecture / Pause",BS_PUSHBUTTON,185,195,145,36,PlayId);
+        make(L"BUTTON",L"Stop",BS_PUSHBUTTON,340,195,80,36,StopId);
+        volumeControl=make(TRACKBAR_CLASSW,L"",TBS_HORZ,450,195,220,34,VolumeId);
+        SendMessageW(volumeControl,TBM_SETRANGE,TRUE,MAKELONG(0,100));SendMessageW(volumeControl,TBM_SETPOS,TRUE,80);
+        for(int i=0;i<10;++i){
+            const int x=52+i*62;
+            eqControls[static_cast<std::size_t>(i)]=make(TRACKBAR_CLASSW,L"",TBS_VERT|TBS_AUTOTICKS,x,330,34,150,EqBase+i);
+            SendMessageW(eqControls[static_cast<std::size_t>(i)],TBM_SETRANGE,TRUE,MAKELONG(-12,12));
+            SendMessageW(eqControls[static_cast<std::size_t>(i)],TBM_SETPOS,TRUE,0);
         }
-        return E_NOINTERFACE;
+        SetTimer(hwnd,TimerId,80,nullptr);return 0;
     }
-    STDMETHODIMP_(ULONG) AddRef() override { return ++refs_; }
-    STDMETHODIMP_(ULONG) Release() override {
-        ULONG n = --refs_;
-        if (!n) delete this;
-        return n;
+    case WM_SIZE:{
+        const int width=std::max(760L,LOWORD(lp));
+        for(int i=0;i<10;++i)MoveWindow(eqControls[static_cast<std::size_t>(i)],52+i*62,330,34,150,TRUE);
+        MoveWindow(volumeControl,450,195,std::min(220,width-480),34,TRUE);return 0;
     }
-    void STDMETHODCALLTYPE OnMediaPlayerEvent(MFP_EVENT_HEADER* event) override {
-        if (event) PostMessageW(hwnd_, WM_APP + 1, static_cast<WPARAM>(event->eEventType), 0);
-    }
-private:
-    volatile LONG refs_ = 1;
-    HWND hwnd_ = nullptr;
-};
-
-HWND g_hwnd = nullptr;
-IMFPMediaPlayer* g_player = nullptr;
-std::wstring g_fileName;
-bool g_isPlaying = false;
-bool g_isDragging = false;
-float g_volume = 0.78f;
-double g_duration = 0.0;
-double g_position = 0.0;
-
-std::wstring BaseName(const std::wstring& path) {
-    const auto pos = path.find_last_of(L"\\/");
-    return pos == std::wstring::npos ? path : path.substr(pos + 1);
-}
-
-std::wstring TimeText(double seconds) {
-    if (!std::isfinite(seconds) || seconds < 0) seconds = 0;
-    const int total = static_cast<int>(seconds);
-    wchar_t buffer[32]{};
-    swprintf_s(buffer, L"%02d:%02d", total / 60, total % 60);
-    return buffer;
-}
-
-void Fill(HDC dc, const RECT& r, COLORREF color) {
-    HBRUSH brush = CreateSolidBrush(color);
-    FillRect(dc, &r, brush);
-    DeleteObject(brush);
-}
-
-void RoundRectFill(HDC dc, const RECT& r, int radius, COLORREF color) {
-    HBRUSH brush = CreateSolidBrush(color);
-    HPEN pen = CreatePen(PS_SOLID, 1, color);
-    auto oldBrush = SelectObject(dc, brush);
-    auto oldPen = SelectObject(dc, pen);
-    RoundRect(dc, r.left, r.top, r.right, r.bottom, radius, radius);
-    SelectObject(dc, oldBrush);
-    SelectObject(dc, oldPen);
-    DeleteObject(brush);
-    DeleteObject(pen);
-}
-
-void Text(HDC dc, const wchar_t* value, int x, int y, int size,
-          COLORREF color, bool bold = false) {
-    HFONT font = CreateFontW(-size, 0, 0, 0, bold ? FW_SEMIBOLD : FW_NORMAL,
-        FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
-        CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE,
-        L"Segoe UI");
-    auto old = SelectObject(dc, font);
-    SetBkMode(dc, TRANSPARENT);
-    SetTextColor(dc, color);
-    TextOutW(dc, x, y, value, static_cast<int>(wcslen(value)));
-    SelectObject(dc, old);
-    DeleteObject(font);
-}
-
-void Gradient(HDC dc, RECT r, COLORREF a, COLORREF b, bool vertical = false) {
-    TRIVERTEX vertices[2] = {
-        {r.left, r.top, static_cast<COLOR16>(GetRValue(a) << 8),
-         static_cast<COLOR16>(GetGValue(a) << 8), static_cast<COLOR16>(GetBValue(a) << 8), 0xffff},
-        {r.right, r.bottom, static_cast<COLOR16>(GetRValue(b) << 8),
-         static_cast<COLOR16>(GetGValue(b) << 8), static_cast<COLOR16>(GetBValue(b) << 8), 0xffff}
-    };
-    GRADIENT_RECT mesh{0, 1};
-    GradientFill(dc, vertices, 2, &mesh, 1, vertical ? GRADIENT_FILL_RECT_V : GRADIENT_FILL_RECT_H);
-}
-
-RECT ProgressRect(const RECT& client) {
-    return RECT{40, client.bottom - 142, client.right - 40, client.bottom - 134};
-}
-
-void DrawButton(HDC dc, RECT r, const wchar_t* glyph, bool primary = false) {
-    RoundRectFill(dc, r, 16, primary ? g_colors.blue : g_colors.panelLight);
-    Text(dc, glyph, r.left + (r.right-r.left)/2 - 7,
-         r.top + (r.bottom-r.top)/2 - 11, 20, g_colors.text, true);
-}
-
-void Paint(HWND hwnd) {
-    PAINTSTRUCT ps{};
-    HDC dc = BeginPaint(hwnd, &ps);
-    RECT client{};
-    GetClientRect(hwnd, &client);
-    Fill(dc, client, g_colors.background);
-
-    // Top navigation and brand
-    RECT top{0, 0, client.right, 76};
-    Fill(dc, top, RGB(19, 21, 31));
-    RECT logo{34, 22, 66, 54};
-    Gradient(dc, logo, g_colors.blue, g_colors.violet);
-    RoundRectFill(dc, logo, 9, g_colors.violet);
-    Text(dc, L"A", 43, 25, 23, RGB(255,255,255), true);
-    Text(dc, L"ALPHA", 78, 20, 21, g_colors.text, true);
-    Text(dc, L"PLAYER", 78, 43, 10, g_colors.cyan, true);
-    Text(dc, L"YOUR SOUND. YOUR SPACE.", client.right - 250, 31, 10, g_colors.muted, true);
-
-    // Main content panel
-    RECT panel{28, 100, client.right - 28, client.bottom - 176};
-    RoundRectFill(dc, panel, 22, g_colors.panel);
-    Text(dc, L"NOW PLAYING", 58, 126, 11, g_colors.cyan, true);
-
-    // Album artwork placeholder
-    RECT art{58, 164, 270, 376};
-    Gradient(dc, art, RGB(39, 110, 255), RGB(151, 55, 230), true);
-    RoundRectFill(dc, art, 20, RGB(89, 75, 230));
-    RECT inner{80, 186, 248, 354};
-    Gradient(dc, inner, RGB(38, 205, 219), RGB(111, 55, 226), true);
-    RoundRectFill(dc, inner, 16, RGB(76, 106, 235));
-    Text(dc, L"ALPHA", 108, 242, 25, RGB(255,255,255), true);
-    Text(dc, L"SOUND", 116, 274, 12, RGB(225,240,255), true);
-
-    Text(dc, L"TRACK TITLE", 304, 186, 11, g_colors.muted, true);
-    const std::wstring title = g_fileName.empty() ? L"Nothing playing yet" : BaseName(g_fileName);
-    Text(dc, title.c_str(), 304, 213, 24, g_colors.text, true);
-    Text(dc, g_fileName.empty() ? L"Open a file to start listening" : L"Local audio file",
-         304, 250, 13, g_colors.muted);
-
-    // Decorative sound bars
-    const int bars[] = {22, 42, 30, 58, 76, 40, 64, 28, 50, 70, 34, 56, 24, 46, 66, 32};
-    int bx = 306;
-    for (int i = 0; i < 16; ++i) {
-        RECT bar{bx, 328 - bars[i]/2, bx + 7, 328 + bars[i]/2};
-        COLORREF c = (i % 3 == 0) ? g_colors.cyan : ((i % 3 == 1) ? g_colors.blue : g_colors.violet);
-        RoundRectFill(dc, bar, 5, c);
-        bx += 13;
-    }
-
-    // Playback panel
-    RECT controls{28, client.bottom - 158, client.right - 28, client.bottom - 22};
-    RoundRectFill(dc, controls, 20, RGB(22, 25, 37));
-    RECT progress = ProgressRect(client);
-    RoundRectFill(dc, progress, 5, RGB(59, 64, 82));
-    const double ratio = g_duration > 0 ? std::clamp(g_position / g_duration, 0.0, 1.0) : 0.0;
-    RECT played = progress;
-    played.right = played.left + static_cast<LONG>((played.right-played.left)*ratio);
-    if (played.right > played.left) RoundRectFill(dc, played, 5, g_colors.cyan);
-
-    Text(dc, TimeText(g_position).c_str(), 40, client.bottom - 124, 10, g_colors.muted);
-    const std::wstring total = TimeText(g_duration);
-    SIZE sz{};
-    GetTextExtentPoint32W(dc, total.c_str(), static_cast<int>(total.size()), &sz);
-    Text(dc, total.c_str(), client.right - 40 - sz.cx, client.bottom - 124, 10, g_colors.muted);
-
-    DrawButton(dc, RECT{client.right/2 - 84, client.bottom - 91, client.right/2 - 36, client.bottom - 43}, L"■");
-    DrawButton(dc, RECT{client.right/2 - 25, client.bottom - 98, client.right/2 + 39, client.bottom - 34},
-               g_isPlaying ? L"Ⅱ" : L"▶", true);
-    DrawButton(dc, RECT{client.right/2 + 50, client.bottom - 91, client.right/2 + 98, client.bottom - 43}, L"↻");
-
-    Text(dc, L"VOLUME", client.right - 230, client.bottom - 91, 9, g_colors.muted, true);
-    RECT vol{client.right - 230, client.bottom - 65, client.right - 60, client.bottom - 59};
-    RoundRectFill(dc, vol, 4, RGB(59,64,82));
-    RECT volFill = vol;
-    volFill.right = vol.left + static_cast<LONG>((vol.right-vol.left)*g_volume);
-    RoundRectFill(dc, volFill, 4, g_colors.pink);
-
-    Text(dc, L"OPEN AUDIO FILE", 46, client.bottom - 205, 10, g_colors.muted, true);
-    Text(dc, L"MP3  WAV  FLAC  AAC  WMA  OGG", 46, client.bottom - 187, 9, g_colors.muted);
-    EndPaint(hwnd, &ps);
-}
-
-void UpdatePosition() {
-    if (!g_player || g_isDragging) return;
-    MFTIME pos = 0, dur = 0;
-    if (SUCCEEDED(g_player->GetPosition(&pos))) g_position = static_cast<double>(pos) / 10000000.0;
-    if (SUCCEEDED(g_player->GetDuration(&dur))) g_duration = static_cast<double>(dur) / 10000000.0;
-    InvalidateRect(g_hwnd, nullptr, FALSE);
-}
-
-void OpenAudio(HWND hwnd) {
-    wchar_t path[32768]{};
-    OPENFILENAMEW ofn{};
-    ofn.lStructSize = sizeof(ofn);
-    ofn.hwndOwner = hwnd;
-    ofn.lpstrFilter = L"Audio files\0*.mp3;*.wav;*.flac;*.aac;*.wma;*.m4a;*.ogg\0All files\0*.*\0";
-    ofn.lpstrFile = path;
-    ofn.nMaxFile = static_cast<DWORD>(std::size(path));
-    ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST;
-    ofn.lpstrTitle = L"Open audio file";
-    if (!GetOpenFileNameW(&ofn)) return;
-
-    g_fileName = path;
-    g_position = 0;
-    g_duration = 0;
-    g_isPlaying = false;
-    if (!g_player) {
-        auto* callback = new PlayerCallback(hwnd);
-        HRESULT hr = MFCreateMediaPlayer(nullptr, TRUE, MFP_OPTION_NONE, callback, hwnd, &g_player);
-        callback->Release();
-        if (FAILED(hr)) {
-            MessageBoxW(hwnd, L"Media Foundation could not initialize the audio player.", L"ALPHA Player", MB_ICONERROR);
-            return;
+    case WM_COMMAND:
+        if(LOWORD(wp)==OpenId){openFile();return 0;}
+        if(LOWORD(wp)==PlayId){
+            if(currentFile.empty()){openFile();return 0;}
+            if(audio.playing()){paused=!paused;audio.pause(paused);}
+            else {paused=false;audio.play(currentFile,hwnd,FinishedMessage);}
+            return 0;
         }
-    }
-    IMFPMediaItem* item = nullptr;
-    HRESULT hr = g_player->CreateMediaItemFromURL(path, FALSE, 0, &item);
-    if (SUCCEEDED(hr) && item) {
-        g_player->SetMediaItem(item);
-        item->Release();
-    } else {
-        MessageBoxW(hwnd, L"This audio file could not be opened by Windows Media Foundation.",
-                    L"ALPHA Player", MB_ICONWARNING);
-    }
-    InvalidateRect(hwnd, nullptr, FALSE);
-}
-
-LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
-    switch (msg) {
-    case WM_CREATE:
-        g_hwnd = hwnd;
-        MFStartup(MF_VERSION);
-        SetTimer(hwnd, kTimerId, kTimerIntervalMs, nullptr);
+        if(LOWORD(wp)==StopId){audio.stop();paused=false;return 0;}
+        break;
+    case WM_HSCROLL:
+        if(reinterpret_cast<HWND>(lp)==volumeControl)audio.setVolume(static_cast<float>(SendMessageW(volumeControl,TBM_GETPOS,0,0))/100.0f);
+        else setEq();
         return 0;
-    case WM_PAINT:
-        Paint(hwnd);
-        return 0;
-    case WM_ERASEBKGND:
-        return 1;
-    case WM_TIMER:
-        UpdatePosition();
-        return 0;
-    case WM_APP + 1:
-        if (wp == MFP_EVENT_TYPE_MEDIAITEM_SET) {
-            if (g_player) {
-                g_player->Play();
-                g_isPlaying = true;
-            }
-        } else if (wp == MFP_EVENT_TYPE_PLAY) {
-            g_isPlaying = true;
-        } else if (wp == MFP_EVENT_TYPE_PAUSE || wp == MFP_EVENT_TYPE_STOP) {
-            g_isPlaying = false;
-        }
-        InvalidateRect(hwnd, nullptr, FALSE);
-        return 0;
-    case WM_LBUTTONDOWN: {
-        const int x = GET_X_LPARAM(lp), y = GET_Y_LPARAM(lp);
-        RECT client{}; GetClientRect(hwnd, &client);
-        if (y > client.bottom - 158 && y < client.bottom - 22) {
-            if (x > client.right/2 - 25 && x < client.right/2 + 39 && y > client.bottom - 105) {
-                if (g_player) {
-                    if (g_isPlaying) g_player->Pause();
-                    else g_player->Play();
-                } else OpenAudio(hwnd);
-            } else if (x > client.right/2 - 90 && x < client.right/2 - 30 && g_player) {
-                g_player->Stop();
-                g_isPlaying = false;
-                g_position = 0;
-            } else if (x > client.right - 240 && x < client.right - 50 && y > client.bottom - 80) {
-                g_volume = std::clamp((x - (client.right - 230)) / 170.0f, 0.0f, 1.0f);
-                if (g_player) g_player->SetVolume(g_volume);
-            } else {
-                RECT p = ProgressRect(client);
-                if (g_player && x >= p.left && x <= p.right && g_duration > 0) {
-                    g_isDragging = true;
-                    g_position = std::clamp((x - p.left) / static_cast<double>(p.right-p.left), 0.0, 1.0) * g_duration;
-                    MFTIME target = static_cast<MFTIME>(g_position * 10000000.0);
-                    g_player->SetPosition(&target);
-                }
-            }
-            InvalidateRect(hwnd, nullptr, FALSE);
-        } else if (y > 100 && y < client.bottom - 176) {
-            OpenAudio(hwnd);
-        }
-        SetCapture(hwnd);
-        return 0;
-    }
-    case WM_MOUSEMOVE:
-        if (g_isDragging && g_player) {
-            RECT client{}; GetClientRect(hwnd, &client);
-            RECT p = ProgressRect(client);
-            const int x = GET_X_LPARAM(lp);
-            g_position = std::clamp((x-p.left)/static_cast<double>(p.right-p.left), 0.0, 1.0) * g_duration;
-            MFTIME target = static_cast<MFTIME>(g_position * 10000000.0);
-            g_player->SetPosition(&target);
-            InvalidateRect(hwnd, nullptr, FALSE);
-        }
-        return 0;
-    case WM_LBUTTONUP:
-        g_isDragging = false;
-        ReleaseCapture();
-        return 0;
+    case WM_TIMER:InvalidateRect(hwnd,nullptr,FALSE);return 0;
+    case FinishedMessage:paused=false;InvalidateRect(hwnd,nullptr,FALSE);return 0;
+    case WM_PAINT:paint(hwnd);return 0;
+    case WM_ERASEBKGND:return 1;
     case WM_KEYDOWN:
-        if (wp == VK_SPACE && g_player) {
-            if (g_isPlaying) g_player->Pause(); else g_player->Play();
-        } else if (wp == 'O' && (GetKeyState(VK_CONTROL) & 0x8000)) {
-            OpenAudio(hwnd);
-        }
-        return 0;
-    case WM_DESTROY:
-        KillTimer(hwnd, kTimerId);
-        if (g_player) { g_player->Shutdown(); g_player->Release(); g_player = nullptr; }
-        MFShutdown();
-        PostQuitMessage(0);
-        return 0;
+        if(wp==VK_SPACE&&audio.playing()){paused=!paused;audio.pause(paused);return 0;}
+        if(wp=='O'&&(GetKeyState(VK_CONTROL)&0x8000)){openFile();return 0;}
+        break;
+    case WM_DESTROY:KillTimer(hwnd,TimerId);audio.stop();PostQuitMessage(0);return 0;
     }
-    return DefWindowProcW(hwnd, msg, wp, lp);
+    return DefWindowProcW(hwnd,msg,wp,lp);
 }
 }
-
-int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show) {
-    CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
-    WNDCLASSEXW wc{};
-    wc.cbSize = sizeof(wc);
-    wc.style = CS_HREDRAW | CS_VREDRAW;
-    wc.lpfnWndProc = WindowProc;
-    wc.hInstance = instance;
-    wc.hCursor = LoadCursorW(nullptr, IDC_ARROW);
-    wc.hbrBackground = nullptr;
-    wc.lpszClassName = kClassName;
-    if (!RegisterClassExW(&wc)) return 1;
-
-    HWND hwnd = CreateWindowExW(0, kClassName, L"ALPHA Player",
-        WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT, 1120, 720,
-        nullptr, nullptr, instance, nullptr);
-    if (!hwnd) return 1;
-    ShowWindow(hwnd, show);
-    UpdateWindow(hwnd);
-
-    MSG msg{};
-    while (GetMessageW(&msg, nullptr, 0, 0) > 0) {
-        TranslateMessage(&msg);
-        DispatchMessageW(&msg);
-    }
-    CoUninitialize();
-    return static_cast<int>(msg.wParam);
+int WINAPI wWinMain(HINSTANCE instance,HINSTANCE,PWSTR,int show){
+    CoInitializeEx(nullptr,COINIT_APARTMENTTHREADED);
+    WNDCLASSEXW wc{sizeof(wc)};wc.style=CS_HREDRAW|CS_VREDRAW;wc.lpfnWndProc=proc;wc.hInstance=instance;wc.hCursor=LoadCursorW(nullptr,IDC_ARROW);wc.hbrBackground=nullptr;wc.lpszClassName=ClassName;
+    if(!RegisterClassExW(&wc)){CoUninitialize();return 1;}
+    HWND hwnd=CreateWindowExW(0,ClassName,L"ALPHA Player",WS_OVERLAPPEDWINDOW|WS_CLIPCHILDREN,CW_USEDEFAULT,CW_USEDEFAULT,1120,760,nullptr,nullptr,instance,nullptr);
+    if(!hwnd){CoUninitialize();return 1;}ShowWindow(hwnd,show);UpdateWindow(hwnd);
+    MSG message{};while(GetMessageW(&message,nullptr,0,0)>0){TranslateMessage(&message);DispatchMessageW(&message);}
+    CoUninitialize();return static_cast<int>(message.wParam);
 }
