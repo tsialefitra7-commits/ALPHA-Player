@@ -87,7 +87,7 @@ LRESULT CALLBACK proc(HWND hwnd,UINT msg,WPARAM wp,LPARAM lp){
         SetTimer(hwnd,TimerId,80,nullptr);return 0;
     }
     case WM_SIZE:{
-        const int width=std::max(760L,LOWORD(lp));
+        const int width=std::max(760,static_cast<int>(LOWORD(lp)));
         for(int i=0;i<10;++i)MoveWindow(eqControls[static_cast<std::size_t>(i)],52+i*62,330,34,150,TRUE);
         MoveWindow(volumeControl,450,195,std::min(220,width-480),34,TRUE);return 0;
     }
