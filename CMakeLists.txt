@@ -27,7 +27,7 @@ if(WIN32)
   target_compile_definitions(AlphaPlayer PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
   target_compile_options(AlphaPlayer PRIVATE /W4 /permissive- /EHsc /utf-8)
   target_link_libraries(AlphaPlayer PRIVATE alpha_core Threads::Threads
-    mfplat mfreadwrite mfuuid ole32 uuid avrt comdlg32 comctl32 gdi32 user32)
+    mfplat mfreadwrite mfuuid ole32 uuid avrt comdlg32 comctl32 gdi32 user32 shell32 propsys)
 else()
   message(STATUS "Building portable ALPHA Player DSP core and tests; Windows UI is built on Windows.")
 endif()
