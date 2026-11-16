@@ -131,7 +131,10 @@ void AudioEngine::run(std::filesystem::path file,HWND window,UINT message){
         }
     }
 cleanup:
-    playing_=false;a.client?a.client->Stop():S_OK;MFShutdown();CoUninitialize();
+    playing_=false;if(a.client)a.client->Stop();
+    release(a.reader);release(a.render);release(a.client);release(a.device);release(a.enumerator);
+    if(a.format){CoTaskMemFree(a.format);a.format=nullptr;}
+    MFShutdown();CoUninitialize();
 }
 }
 #endif
