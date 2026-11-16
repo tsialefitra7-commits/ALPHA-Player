@@ -1,7 +1,7 @@
-#define NOMINMAX
 #include <windows.h>
 #include <commdlg.h>
 #include <commctrl.h>
+#include <objbase.h>
 #include <algorithm>
 #include <array>
 #include <filesystem>
