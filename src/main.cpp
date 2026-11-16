@@ -2,9 +2,9 @@
 #include <commdlg.h>
 #include <commctrl.h>
 #include <objbase.h>
-#include <mfapi.h>
-#include <mfidl.h>
-#include <mfreadwrite.h>
+#include <shobjidl.h>
+#include <propkey.h>
+#include <propvarutil.h>
 #include <algorithm>
 #include <array>
 #include <filesystem>
@@ -27,24 +27,24 @@ std::filesystem::path settingsPath;
 struct Metadata { std::wstring title,artist,album; } currentMetadata;
 COLORREF bg=RGB(15,17,25),panel=RGB(26,30,43),white=RGB(244,246,255),muted=RGB(145,155,180),cyan=RGB(39,218,225),violet=RGB(151,88,255),pink=RGB(255,82,166);
 constexpr std::array<const wchar_t*,10> labels{L"31",L"62",L"125",L"250",L"500",L"1K",L"2K",L"4K",L"8K",L"16K"};
-std::wstring readString(IMFSourceReader* reader,const GUID& key){
-    PROPVARIANT v;PropVariantInit(&v);std::wstring out;
-    if(SUCCEEDED(reader->GetPresentationAttribute(static_cast<DWORD>(MF_SOURCE_READER_MEDIASOURCE),key,&v))){
-        if(v.vt==VT_LPWSTR&&v.pwszVal)out=v.pwszVal;
-        else if(v.vt==VT_BSTR&&v.bstrVal)out=v.bstrVal;
+std::wstring propertyString(IPropertyStore* store,REFPROPERTYKEY key){
+    PROPVARIANT value;PropVariantInit(&value);std::wstring result;
+    if(SUCCEEDED(store->GetValue(key,&value))){
+        PWSTR converted=nullptr;
+        if(SUCCEEDED(PropVariantToStringAlloc(value,&converted))&&converted){result=converted;CoTaskMemFree(converted);}
     }
-    PropVariantClear(&v);return out;
+    PropVariantClear(&value);return result;
 }
 Metadata metadataFor(const std::filesystem::path& file){
     Metadata m;m.title=file.stem().wstring();
-    if(FAILED(MFStartup(MF_VERSION)))return m;
-    IMFSourceReader* reader=nullptr;
-    if(SUCCEEDED(MFCreateSourceReaderFromURL(file.c_str(),nullptr,&reader))){
-        auto s=readString(reader,MF_PD_TITLE);if(!s.empty())m.title=s;
-        m.artist=readString(reader,MF_PD_ARTIST);m.album=readString(reader,MF_PD_ALBUM);
-        reader->Release();
+    IPropertyStore* store=nullptr;
+    if(SUCCEEDED(SHGetPropertyStoreFromParsingName(file.c_str(),nullptr,GPS_DEFAULT,IID_PPV_ARGS(&store)))){
+        auto title=propertyString(store,PKEY_Title);if(!title.empty())m.title=title;
+        m.artist=propertyString(store,PKEY_Music_Artist);
+        m.album=propertyString(store,PKEY_Music_AlbumTitle);
+        store->Release();
     }
-    MFShutdown();return m;
+    return m;
 }
 void text(HDC dc,const wchar_t* value,int x,int y,int size,COLORREF color,bool bold=false){
     HFONT f=CreateFontW(-size,0,0,0,bold?FW_SEMIBOLD:FW_NORMAL,FALSE,FALSE,FALSE,DEFAULT_CHARSET,OUT_DEFAULT_PRECIS,CLIP_DEFAULT_PRECIS,CLEARTYPE_QUALITY,DEFAULT_PITCH,L"Segoe UI");
