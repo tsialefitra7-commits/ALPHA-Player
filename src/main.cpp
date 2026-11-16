@@ -24,9 +24,9 @@ int currentIndex=-1;
 bool paused=false,repeat=false,shuffle=false,seeking=false;
 std::mt19937 randomEngine{std::random_device{}()};
 std::filesystem::path settingsPath;
+struct Metadata { std::wstring title,artist,album; } currentMetadata;
 COLORREF bg=RGB(15,17,25),panel=RGB(26,30,43),white=RGB(244,246,255),muted=RGB(145,155,180),cyan=RGB(39,218,225),violet=RGB(151,88,255),pink=RGB(255,82,166);
 constexpr std::array<const wchar_t*,10> labels{L"31",L"62",L"125",L"250",L"500",L"1K",L"2K",L"4K",L"8K",L"16K"};
-struct Metadata { std::wstring title,artist,album; };
 std::wstring readString(IMFSourceReader* reader,const GUID& key){
     PROPVARIANT v;PropVariantInit(&v);std::wstring out;
     if(SUCCEEDED(reader->GetPresentationAttribute(static_cast<DWORD>(MF_SOURCE_READER_MEDIASOURCE),key,&v))){
@@ -62,7 +62,7 @@ void updateList(){SendMessageW(playlistControl,LB_RESETCONTENT,0,0);for(const au
 void playIndex(int index){
     if(playlist.empty())return;
     if(index<0||index>=static_cast<int>(playlist.size()))return;
-    currentIndex=index;paused=false;
+    currentIndex=index;paused=false;currentMetadata=metadataFor(playlist[currentIndex]);
     if(!audio.play(playlist[currentIndex],windowHandle,FinishedMessage))MessageBoxW(windowHandle,L"Impossible de démarrer le moteur audio.",L"ALPHA Player",MB_ICONERROR);
     updateList();InvalidateRect(windowHandle,nullptr,FALSE);
 }
@@ -93,7 +93,7 @@ void paint(HWND hwnd){
     RECT card{20,90,r.right-20,r.bottom-18};fill(dc,card,panel);
     text(dc,L"LECTURE EN COURS",42,108,11,cyan,true);
     std::wstring title=L"Aucun morceau";std::wstring artist,album;
-    if(currentIndex>=0&&currentIndex<static_cast<int>(playlist.size())){auto m=metadataFor(playlist[currentIndex]);title=m.title;artist=m.artist;album=m.album;}
+    if(currentIndex>=0&&currentIndex<static_cast<int>(playlist.size())){title=currentMetadata.title;artist=currentMetadata.artist;album=currentMetadata.album;}
     text(dc,title.c_str(),42,132,20,white,true);
     std::wstring details=(artist.empty()?L"Artiste inconnu":artist)+L"   •   "+(album.empty()?L"Album inconnu":album);
     text(dc,details.c_str(),42,160,10,muted);
@@ -145,7 +145,7 @@ LRESULT CALLBACK proc(HWND hwnd,UINT msg,WPARAM wp,LPARAM lp){
     const auto d=audio.duration(),p=audio.position();if(d>0&&GetCapture()!=progressControl)SendMessageW(progressControl,TBM_SETPOS,TRUE,static_cast<LPARAM>(std::min<std::uint64_t>(1000,p*1000/d)));
     InvalidateRect(hwnd,nullptr,FALSE);return 0;
  }
- case FinishedMessage:paused=false;if(repeat&&currentIndex==static_cast<int>(playlist.size())-1)playIndex(currentIndex);else nextTrack();return 0;
+ case FinishedMessage:paused=false;if(repeat)playIndex(currentIndex);else nextTrack();return 0;
  case WM_KEYDOWN:if(wp==VK_SPACE&&audio.playing()){paused=!paused;audio.pause(paused);return 0;}if(wp==VK_RIGHT)nextTrack();if(wp==VK_LEFT)previousTrack();break;
  case WM_PAINT:paint(hwnd);return 0;
  case WM_ERASEBKGND:return 1;
