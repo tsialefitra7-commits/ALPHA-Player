@@ -95,6 +95,7 @@ void AudioEngine::run(std::filesystem::path file,HWND window,UINT message){
                 if(FAILED(hr)||!buffer){release(buffer);break;}
                 BYTE* bytes=nullptr;DWORD max=0,length=0;hr=buffer->Lock(&bytes,&max,&length);
                 if(FAILED(hr)){release(buffer);break;}
+                if(length>max){buffer->Unlock();release(buffer);break;}
                 const std::size_t frames=length/(sizeof(float)*channels);
                 std::vector<float> pcm(frames*channels);
                 if(frames)std::memcpy(pcm.data(),bytes,pcm.size()*sizeof(float));
