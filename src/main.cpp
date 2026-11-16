@@ -5,6 +5,8 @@
 #include <algorithm>
 #include <array>
 #include <filesystem>
+#include <iterator>
+#include <cwchar>
 #include <string>
 #include "platform/audio_engine_win32.hpp"
 namespace {
@@ -48,6 +50,7 @@ void paint(HWND hwnd){
     text(dc,title.c_str(),48,166,23,white,true);
     text(dc,L"ÉGALISEUR 10 BANDES",48,280,12,muted,true);
     text(dc,L"-12 dB",48,322,9,muted);text(dc,L"0 dB",48,392,9,muted);text(dc,L"+12 dB",48,460,9,muted);
+    for(int i=0;i<10;++i)text(dc,labels[static_cast<std::size_t>(i)],52+i*62,492,9,muted);
     text(dc,L"VISUALISEUR AUDIO",430,280,12,muted,true);
     const auto levels=audio.levels();
     for(std::size_t i=0;i<levels.size();++i){
