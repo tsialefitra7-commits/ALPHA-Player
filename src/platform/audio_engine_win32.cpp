@@ -1,5 +1,4 @@
 #ifdef _WIN32
-#define NOMINMAX
 #include "audio_engine_win32.hpp"
 #include <audioclient.h>
 #include <mmdeviceapi.h>
@@ -59,7 +58,7 @@ void AudioEngine::run(std::filesystem::path file,HWND window,UINT message){
         if(SUCCEEDED(hr))hr=a.client->GetService(IID_PPV_ARGS(&a.render));
         IMFAttributes* attrs=nullptr;
         if(SUCCEEDED(hr))hr=MFCreateAttributes(&attrs,1);
-        if(SUCCEEDED(hr))hr=attrs->SetUINT32(MF_READWRITE_DISABLE_CONVERTERS,FALSE);
+        if(SUCCEEDED(hr))hr=attrs->SetUINT32(MF_READWRITE_DISABLE_CONVERTERS,0u);
         if(SUCCEEDED(hr))hr=MFCreateSourceReaderFromURL(file.c_str(),attrs,&a.reader);
         release(attrs);
         IMFMediaType* type=nullptr;
@@ -69,11 +68,11 @@ void AudioEngine::run(std::filesystem::path file,HWND window,UINT message){
         if(SUCCEEDED(hr))hr=type->SetUINT32(MF_MT_AUDIO_NUM_CHANNELS,channels);
         if(SUCCEEDED(hr))hr=type->SetUINT32(MF_MT_AUDIO_SAMPLES_PER_SECOND,rate);
         if(SUCCEEDED(hr))hr=type->SetUINT32(MF_MT_AUDIO_BITS_PER_SAMPLE,32);
-        if(SUCCEEDED(hr))hr=a.reader->SetCurrentMediaType(MF_SOURCE_READER_FIRST_AUDIO_STREAM,nullptr,type);
+        if(SUCCEEDED(hr))hr=a.reader->SetCurrentMediaType(static_cast<DWORD>(MF_SOURCE_READER_FIRST_AUDIO_STREAM),nullptr,type);
         release(type);
         if(FAILED(hr))goto cleanup;
         PROPVARIANT d;PropVariantInit(&d);
-        if(SUCCEEDED(a.reader->GetPresentationAttribute(MF_SOURCE_READER_MEDIASOURCE,MF_PD_DURATION,&d))&&d.vt==VT_UI8)duration_=d.uhVal.QuadPart;
+        if(SUCCEEDED(a.reader->GetPresentationAttribute(static_cast<DWORD>(MF_SOURCE_READER_MEDIASOURCE),MF_PD_DURATION,&d))&&d.vt==VT_UI8)duration_=d.uhVal.QuadPart;
         PropVariantClear(&d);
         UINT32 capacity=0;if(FAILED(a.client->GetBufferSize(&capacity))||!capacity)goto cleanup;
         if(FAILED(a.client->Start()))goto cleanup;
@@ -87,7 +86,7 @@ void AudioEngine::run(std::filesystem::path file,HWND window,UINT message){
                 UINT32 padding=0;if(FAILED(a.client->GetCurrentPadding(&padding)))break;
                 if(padding>=capacity){Sleep(3);continue;}
                 IMFSample* sample=nullptr;LONGLONG stamp=0;
-                hr=a.reader->ReadSample(MF_SOURCE_READER_FIRST_AUDIO_STREAM,0,nullptr,&flags,&stamp,&sample);
+                hr=a.reader->ReadSample(static_cast<DWORD>(MF_SOURCE_READER_FIRST_AUDIO_STREAM),0,nullptr,&flags,&stamp,&sample);
                 if(FAILED(hr)){release(sample);break;}
                 if(flags&MF_SOURCE_READERF_ENDOFSTREAM){release(sample);ended=true;break;}
                 if(!sample){Sleep(2);continue;}
