@@ -1,35 +1,33 @@
 cmake_minimum_required(VERSION 3.20)
+project(ALPHA_Player VERSION 1.0.0 LANGUAGES CXX)
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
 
-project(ALPHA_Player VERSION 0.1.0 LANGUAGES CXX)
-
-if(NOT WIN32)
-    message(FATAL_ERROR "ALPHA Player currently targets Windows 10/11.")
+add_library(alpha_core src/core/player_core.cpp)
+target_include_directories(alpha_core PUBLIC src)
+if(MSVC)
+  target_compile_options(alpha_core PRIVATE /W4 /permissive-)
+else()
+  target_compile_options(alpha_core PRIVATE -Wall -Wextra -Wpedantic -Werror)
 endif()
 
-add_executable(AlphaPlayer WIN32
-    src/main.cpp
-)
+option(ALPHA_BUILD_TESTS "Build portable audio DSP tests" ON)
+if(ALPHA_BUILD_TESTS)
+  enable_testing()
+  add_executable(alpha_core_tests tests/core_tests.cpp)
+  target_link_libraries(alpha_core_tests PRIVATE alpha_core)
+  add_test(NAME alpha_core_tests COMMAND alpha_core_tests)
+endif()
 
-target_compile_features(AlphaPlayer PRIVATE cxx_std_17)
-target_compile_definitions(AlphaPlayer PRIVATE
-    UNICODE
-    _UNICODE
-    WIN32_LEAN_AND_MEAN
-    NOMINMAX
-)
-
-target_link_libraries(AlphaPlayer PRIVATE
-    mf
-    mfplat
-    mfplay
-    mfuuid
-    ole32
-    shell32
-    comdlg32
-    gdi32
-    user32
-)
-
-if(MSVC)
-    target_compile_options(AlphaPlayer PRIVATE /W4 /permissive- /EHsc)
+if(WIN32)
+  find_package(Threads REQUIRED)
+  add_executable(AlphaPlayer WIN32 src/main.cpp src/platform/audio_engine_win32.cpp)
+  target_include_directories(AlphaPlayer PRIVATE src)
+  target_compile_definitions(AlphaPlayer PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
+  target_compile_options(AlphaPlayer PRIVATE /W4 /permissive- /EHsc /utf-8)
+  target_link_libraries(AlphaPlayer PRIVATE alpha_core Threads::Threads
+    mfplat mfreadwrite mfuuid ole32 uuid avrt comdlg32 comctl32 gdi32 user32)
+else()
+  message(STATUS "Building portable ALPHA Player DSP core and tests; Windows UI is built on Windows.")
 endif()
