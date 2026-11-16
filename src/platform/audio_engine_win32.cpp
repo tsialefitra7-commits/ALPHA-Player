@@ -104,8 +104,7 @@ void AudioEngine::run(std::filesystem::path file,HWND window,UINT message){
                 for(std::size_t i=0;i<10;++i){const float v=gains_[i].load();if(v!=gains[i])changed=true;gains[i]=v;}
                 if(changed)eq.configure(rate,gains);
                 eq.process(pcm.data(),frames,channels);
-                double energy=0;
-                for(float& v:pcm){v=std::clamp(v,-1.0f,1.0f);energy+=double(v)*v;v*=volume_.load();}
+                for(float& v:pcm){v=std::clamp(v,-1.0f,1.0f);v*=volume_.load();}
                 visualizer.push(pcm.data(),frames,channels);
                 const auto visualLevels=visualizer.levels();
                 for(std::size_t i=0;i<32;++i)levels_[i]=visualLevels[i];
